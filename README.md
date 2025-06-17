@@ -34,13 +34,21 @@ These steps ensure a realistic, data-driven PSF that can be applied to complex s
 ## 📁 Project Structure (planned)
 
 LISAN/
+
 ├── lisan_core.py # Core logic for radial PSF stacking
+
 ├── star_selection.py # Stellar filtering and Gaia crossmatch
+
 ├── centroid_refinement.py # Subpixel centering of image cutouts
+
 ├── psf_builder.py # Multi-bin radial stacking and joining
+
 ├── config.yaml # User configuration file
+
 ├── data/ # Raw input catalogues and image cutouts
+
 ├── output/ # Final PSF models and diagnostics
+
 └── notebooks/ # Example Jupyter notebooks
 
 ---

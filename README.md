@@ -99,18 +99,31 @@ python3 lisan.py \
 ```
 ## 📁 Directory Structure
 LISAN/
+
 ├── lisan.py
+
 ├── modules/
+
 │ ├── psf_builder.py
+
 │ ├── masking.py
+
 │ ├── making_catalogs.py
+
 │ └── measure_depth.py
+
 ├── Process_data/
+
 │ ├── Mask_data/
+
 │ ├── Make_catalogs/
+
 │ └── Building_PSF/
+
 ├── PSF_files/
+
 │ └── Inner_parts/
+
 └── README.md
 
 ## 📦 Dependencies

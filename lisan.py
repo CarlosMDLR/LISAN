@@ -391,10 +391,6 @@ def main():
 
         # Galaxy name: sólo si el usuario lo pide
         gal = None
-        if args.join_galaxy_from_dir:
-            gal = _infer_galaxy_from_dir(input_dir)
-            if gal is None:
-                raise SystemExit("Could not infer galaxy from --dir (no FITS found).")
 
         # Si no infiere, asume que --dir YA ES el nombre de galaxia (tu comportamiento original)
         gal = gal if gal is not None else str(args.dir)

@@ -256,42 +256,49 @@ def fits_hdu_has_data(path: Path, hdu_index: int) -> bool:
 # PSFBuilder (pipeline-facing)
 # -----------------------------------------------------------------------------
 class PSFBuilder:
-    """
-    Pipeline-facing builder. For now:
-      - INNER implemented (A/B/C)
-      - OUTER not implemented
-    """
-
     def __init__(
         self,
-        filters: Sequence[str],
-        directorio: Path,
+        filters,
+        directorio,
         *,
-        select_parts: str = "I",  # "I", "O", "B"
-        parts: Sequence[str] = ("A", "B", "C"),
-        min_dist: Sequence[str] = ("0.015", "0.015", "0.015"),
-        norm_radii: Sequence[str] = ("5,10", "10,20", "20,40"),
-        width_image: Sequence[str] = ("200,200", "400,400", "800,800"),
-        selection_radii_arcmin: Sequence[float] = (15.0, 15.0, 15.0),
-        branch_mag_min: float = 16.0,
-        branch_mag_max: float = 18.0,
-        nc_inner_args: Optional[List[str]] = None,
-        seg_inner_args: Optional[List[str]] = None,
-        nc_outer_args: Optional[List[str]] = None,
-        seg_outer_args: Optional[List[str]] = None,
-        # NEW: passed from argparse, used by graph_interactive_center()
-        center_sigma: float = 5.0,
-        center_max_iter: int = 5,
+        select_parts="I",
+        parts=("A", "B", "C"),
+        min_dist=("0.015", "0.015", "0.015"),
+        norm_radii=("5,10", "10,20", "20,40"),
+        width_image=("200,200", "400,400", "800,800"),
+        selection_radii_arcmin=(15.0, 15.0, 15.0),
+        min_dist_outer=("0.0"),
+        norm_radii_outer=("5,10"),
+        width_image_outer=("200,200"),
+        step_min_dist_outer=0.015,
+        step_norm_radii_outer=(5, 10),
+        step_width_image_outer=(200, 200),
+        branch_mag_min=16.0,
+        branch_mag_max=18.0,
+        nc_inner_args=None,
+        seg_inner_args=None,
+        nc_outer_args=None,
+        seg_outer_args=None,
+        center_sigma=5.0,
+        center_max_iter=5,
     ):
         self.filters = list(filters)
         self.directorio = Path(directorio)
-        self.select_parts = select_parts.upper()
+        self.select_parts = str(select_parts).upper()
 
         self.parts = list(parts)
         self.min_dist = list(min_dist)
         self.norm_radii = list(norm_radii)
         self.width_image = list(width_image)
         self.selection_radii = list(selection_radii_arcmin)
+        
+        self.min_dist_outer = list(min_dist_outer) if isinstance(min_dist_outer, (list, tuple)) else [min_dist_outer]
+        self.norm_radii_outer = list(norm_radii_outer) if isinstance(norm_radii_outer, (list, tuple)) else [norm_radii_outer]
+        self.width_image_outer = list(width_image_outer) if isinstance(width_image_outer, (list, tuple)) else [width_image_outer]
+
+        self.step_min_dist_outer = float(step_min_dist_outer)
+        self.step_norm_radii_outer = tuple(float(x) for x in step_norm_radii_outer)
+        self.step_width_image_outer = tuple(float(x) for x in step_width_image_outer)
 
         self.branch_mag_min = float(branch_mag_min)
         self.branch_mag_max = float(branch_mag_max)
@@ -299,19 +306,6 @@ class PSFBuilder:
         self.center_sigma = float(center_sigma)
         self.center_max_iter = int(center_max_iter)
 
-        if self.branch_mag_max <= self.branch_mag_min:
-            raise ValueError("branch_mag_max must be > branch_mag_min")
-
-        if not (
-            len(self.parts)
-            == len(self.min_dist)
-            == len(self.norm_radii)
-            == len(self.width_image)
-            == len(self.selection_radii)
-        ):
-            raise ValueError("parts/min_dist/norm_radii/width_image/selection_radii_arcmin must have same length")
-
-        # Default inner masking args (faithful to original values)
         self.nc_inner_args = nc_inner_args or [
             "--tilesize=20,20",
             "--outliernumngb=5",
@@ -329,18 +323,24 @@ class PSFBuilder:
             "--minnumfalse=1",
         ]
 
-        # Placeholders for later
-        self.nc_outer_args = nc_outer_args
-        self.seg_outer_args = seg_outer_args
+        # Outer: si no se pasa nada, reutiliza los de inner
+        self.nc_outer_args = nc_outer_args or self.nc_inner_args
+        self.seg_outer_args = seg_outer_args or self.seg_inner_args
 
-        # Fixed project dirs (as in original)
+        # Dirs existentes
         self.dir_build = Path("./Process_data/Building_PSF")
         self.dir_gaia_match = Path("./Process_data/Make_catalogs/Data_catalog_gaia_match")
         self.seg_dir = Path("./Process_data/Make_catalogs/Mask_segment")
         self.psf_out_dir = Path("./PSF_files/Inner_parts")
 
+        # NEW: dirs para OUTER (separados)
+        self.dir_build_outer = self.dir_build / "Outer_parts"
+        self.psf_out_dir_outer = Path("./PSF_files/Outer_parts")
+
         _ensure_dir(self.dir_build)
         _ensure_dir(self.psf_out_dir)
+        _ensure_dir(self.dir_build_outer)
+        _ensure_dir(self.psf_out_dir_outer)
 
     @staticmethod
     def nearest_position(x: float, x_array: np.ndarray) -> int:
@@ -353,6 +353,9 @@ class PSFBuilder:
                 posicion_mas_cercana = indice
         return posicion_mas_cercana
 
+
+
+    
     def masks_maker_inner(self, stamp_path: Path):
         name = str(stamp_path)
         output = name.replace(".fits", "_noisechisel.fits")
@@ -436,7 +439,9 @@ class PSFBuilder:
                         pass
             return 0, 0
 
-
+    def masks_maker_outer(self, stamp_path: Path):
+        return self.masks_maker_inner(stamp_path)
+    
     def _save_diag_plot(
         self,
         outpath: Path,
@@ -516,7 +521,7 @@ class PSFBuilder:
         # Try stacking reading stars from HDU 0, then 1
         stack_ok = False
         stack_hdu_used: int | None = None
-        breakpoint()
+        
         for in_hdu in (0, 1):
             try:
                 # astarithmetic with explicit input HDU
@@ -567,9 +572,8 @@ class PSFBuilder:
         return stack_path.exists() and (fits_hdu_has_data(stack_path, 0) or fits_hdu_has_data(stack_path, 1)) and prof_ok
 
     def build(self) -> None:
-        # OUTER not yet (per request: start from zero, inner only)
-        if self.select_parts in ("O", "B"):
-            raise NotImplementedError("OUTER PSF building is not implemented yet in this refactor (inner-only).")
+        do_inner = self.select_parts in ("I", "B")
+        do_outer = self.select_parts in ("O", "B")
 
         for flt in self.filters:
             print("\n" + 40 * "=")
@@ -672,7 +676,7 @@ class PSFBuilder:
                 upper_bounds = np.flip(upper_bounds)
                 lower_bounds = np.flip(lower_bounds)
 
-                # Open science cutout for recentering
+                # Open science cutout for recentering / WCS
                 try:
                     hdu_list = fits.open(ruta_completa)
                     image_data = hdu_list[1].data
@@ -682,377 +686,741 @@ class PSFBuilder:
                     print(f"[skip] could not open science cutout for WCS/image: {e}")
                     continue
 
-                # Build each inner part
-                for i, part in enumerate(self.parts):
-                    mag_sup_lim = str(np.round(lower_bounds[i], 1))
-                    mag_inf_lim = str(np.round(upper_bounds[i], 1))
+                # =======================================================
+                # =========================== INNER =====================
+                # =======================================================
+                if do_inner:
+                    # Build each inner part
+                    for i, part in enumerate(self.parts):
+                        mag_sup_lim = str(np.round(lower_bounds[i], 1))
+                        mag_inf_lim = str(np.round(upper_bounds[i], 1))
 
-                    min_dist = self.min_dist[i]
-                    norm_radii = self.norm_radii[i]
-                    width_image = self.width_image[i]
-                    selec_radii = float(self.selection_radii[i])
+                        min_dist = self.min_dist[i]
+                        norm_radii = self.norm_radii[i]
+                        width_image = self.width_image[i]
+                        selec_radii = float(self.selection_radii[i])
 
-                    # 1) select stars
-
-                    print(f"\n ▸ Building part {part} with mag limits {mag_inf_lim} - {mag_sup_lim} and min_dist {min_dist}")
-                    dir_stars = _ensure_dir(self.dir_build / f"{part}_stars")
-                    ruta_star = dir_stars / name.replace(".fits", f"_{part}_stars.fits")
-
-                    os.system(
-                        f"astscript-psf-select-stars {ruta_completa} "
-                        f"--magnituderange={mag_inf_lim},{mag_sup_lim} "
-                        f"--mindistdeg={min_dist} --output={ruta_star} "
-                        f"> /dev/null 2>&1"
-                    )
-
-                    if not ruta_star.exists():
-                        print(f"[skip] no star catalog produced for {name_gal} {flt} {part}")
-                        continue
-
-                    # 2) mix with Gaia via nearest_position (faithful)
-                    print(f"\n ▸ Mixing with Gaia and applying HR/Mag cuts for {name_gal} {flt} {part}")
-                    try:
-                        hr_prueba = []
-                        mag_prueba = []
-                        ra_prueba = []
-                        dec_prueba = []
-
-                        hprueba = fits.open(ruta_star)
-                        tab = hprueba[1].data
-
-                        for num in range(0, len(tab)):
-                            ra = float(tab["ra"][num])
-                            dec = float(tab["dec"][num])
-                            mag = float(tab["phot_g_mean_mag"][num])
-
-                            pos_ra = self.nearest_position(ra, ra_gaia)
-                            pos_dec = self.nearest_position(dec, dec_gaia)
-                            _pos_mag = self.nearest_position(mag, mag_gaia)
-
-                            if pos_ra == pos_dec:
-                                ra_prueba.append(float(ra_gaia[pos_ra]))
-                                dec_prueba.append(float(dec_gaia[pos_ra]))
-                                hr_prueba.append(float(hr_gaia[pos_ra]))
-                                mag_prueba.append(float(mag_gaia[pos_ra]))
-                            else:
-                                ra_prueba.append(0.0)
-                                dec_prueba.append(0.0)
-                                hr_prueba.append(0.0)
-                                mag_prueba.append(0.0)
-
-                        hr_prueba = np.array(hr_prueba)
-                        mag_prueba = np.array(mag_prueba)
-                        ra_prueba = np.array(ra_prueba)
-                        dec_prueba = np.array(dec_prueba)
-
-                        lim_mags_inf = mag_prueba > float(mag_inf_lim)
-                        lim_mags_upper = mag_prueba < float(mag_sup_lim)
-                        lim_mags = np.invert(lim_mags_inf ^ lim_mags_upper)
-
-                        hr_prueba = hr_prueba[lim_mags]
-                        mag_prueba = mag_prueba[lim_mags]
-                        ra_prueba = ra_prueba[lim_mags]
-                        dec_prueba = dec_prueba[lim_mags]
-
-                        bol_min2 = np.log10(hr_prueba) > lim_min
-                        bol_max2 = np.log10(hr_prueba) < lim_max
-                        bol2 = bol_max2 ^ bol_min2
-                        bol_selected2 = np.invert(bol2)
-
-                        mag_final_selected = mag_prueba[bol_selected2]
-                        hr_final_selected = hr_prueba[bol_selected2]
-                        ra_final_selected = ra_prueba[bol_selected2]
-                        dec_final_selected = dec_prueba[bol_selected2]
-
-                        # angular cut (faithful)
-                        ra_gal, dec_gal = obtain_coords(name_gal)
-                        galaxy_coord = SkyCoord(ra=ra_gal * u.degree, dec=dec_gal * u.degree)
-                        stars_coord = SkyCoord(ra=ra_final_selected * u.degree, dec=dec_final_selected * u.degree)
-                        angular_distance = stars_coord.separation(galaxy_coord)
-                        radius = selec_radii * u.arcminute
-                        mask = angular_distance <= radius
-
-                        ra_final_selected = ra_final_selected[mask]
-                        dec_final_selected = dec_final_selected[mask]
-                        mag_final_selected = mag_final_selected[mask]
-                        hr_final_selected = hr_final_selected[mask]
-
-                        # Save RA/DEC/MAG catalog (faithful)
-                        data_combined = np.zeros(
-                            len(mag_final_selected),
-                            dtype=[("ra", ">f8"), ("dec", ">f8"), ("phot_g_mean_mag", ">f8")],
-                        )
-                        data_combined["ra"] = ra_final_selected
-                        data_combined["dec"] = dec_final_selected
-                        data_combined["phot_g_mean_mag"] = mag_final_selected
-                        hprueba[1].header["NAXIS2"] = int(len(mag_final_selected))
-
-                        new_hdul = fits.HDUList(
-                            [
-                                fits.PrimaryHDU(header=hprueba[0].header),
-                                fits.BinTableHDU(data_combined, header=hprueba[1].header),
-                            ]
-                        )
-                        hprueba.close()
-                        new_hdul.writeto(ruta_star, overwrite=True)
-
-                        # Diagnostic plot (same content as original)
-                        diag_dir = _ensure_dir(self.dir_build / "Diagnostics")
-                        diag_path = diag_dir / f"{name_gal}_{flt}_{part}_mag_hr.jpg"
-                        self._save_diag_plot(
-                            diag_path,
-                            hr_gaia=hr_gaia,
-                            mag_gaia=mag_gaia,
-                            hr_gaia_select=hr_gaia_select,
-                            mag_gaia_select=mag_gaia_select,
-                            hr_branch=hr_branch,
-                            mag_branch=mag_branch,
-                            hr_final_selected=hr_final_selected,
-                            mag_final_selected=mag_final_selected,
-                            hr_prueba=hr_prueba,
-                            mag_prueba=mag_prueba,
-                            rejected_mask=~bol_selected2,
-                            min_value=float(min_value),
-                            agua_mean=float(np.mean(agua_2)),
-                            lim_min=float(lim_min),
-                            lim_max=float(lim_max),
-                            title=f"{name_gal} Filter {flt}",
-                        )
-
-                        if len(mag_final_selected) == 0:
-                            print(f"[skip] no stars after filters for {name_gal} {flt} {part}")
-                            continue
-
-                    except Exception as e:
-                        print(f"[skip] failure in Gaia/gnuastro mixing stage: {e}")
-                        try:
-                            hprueba.close()
-                        except Exception:
-                            pass
-                        continue
-
-                    # 3) recenter (faithful) + sigma configurable
-                    print(f"\n ▸ Recentering stars for {name_gal} {flt} {part} with sigma={self.center_sigma} and max_iter={self.center_max_iter}")
-                    try:
-                        h_center = fits.open(ruta_star)
-                        ra = h_center[1].data["ra"]
-                        dec = h_center[1].data["dec"]
-                        h_center.close()
-
-                        pixel_coords = wcs.world_to_pixel_values([r for r in ra], [d for d in dec])
-                        pixel_coords = np.array(pixel_coords).T
-
-                        y_new = []
-                        x_new = []
-                        for coord in tqdm(pixel_coords, desc=f"{name_gal} {part} centers", leave=False):
-                            x, y = int(coord[0]), int(coord[1])
-                           
-                            try:
-                                new_center = graph_interactive_center(
-                                    image_data,
-                                    (x, y),
-                                    False,
-                                    10,
-                                    sigma=self.center_sigma,
-                                    max_iter=self.center_max_iter,
-                                )
-                                y_new.append(float(new_center[0]))
-                                x_new.append(float(new_center[1]))
-                            except Exception:
-                                y_new.append(float(y))
-                                x_new.append(float(x))
-
-                        y_new = np.array(y_new)
-                        x_new = np.array(x_new)
-
-                        data_xy = np.zeros(
-                            len(mag_final_selected),
-                            dtype=[("x_px", ">f8"), ("y_px", ">f8"), ("phot_g_mean_mag", ">f8")],
-                        )
-                        data_xy["x_px"] = x_new
-                        data_xy["y_px"] = y_new
-                        data_xy["phot_g_mean_mag"] = mag_final_selected
-
-                        fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(data_xy, name="STARS")]).writeto(
-                            ruta_star, overwrite=True
-                        )
-
-                    except Exception as e:
-                        print(f"[skip] center correction failed: {e}")
-                        continue
-
-                    # 4) stamps using seg-cutout as image and segment
-                    #    NEW: create stamps first; then in Python, if the *image value at the stamp center* is negative,
-                    #    multiply the whole stamp by -1 (without touching the center coordinates used for stamping).
-                    print(f"\n ▸ Stamping and masking for {name_gal} {flt} {part}")
-                    try:
-                        crops_root = _ensure_dir(self.dir_build / "Star_crops" / part)
-                        ruta_gal_folder = _ensure_dir(crops_root / f"{name_gal}_{flt}")
-
-                        out_base = name.replace(".fits", "")
-                        out_root = ruta_gal_folder / out_base
-                        ruta_out = str(out_root)  # used later for manual deletion block (kept close to original style)
+                        # 1) select stars
+                        print(f"\n ▸ Building part {part} with mag limits {mag_inf_lim} - {mag_sup_lim} and min_dist {min_dist}")
+                        dir_stars = _ensure_dir(self.dir_build / f"{part}_stars")
+                        ruta_star = dir_stars / name.replace(".fits", f"_{part}_stars.fits")
 
                         os.system(
-                            "{ "
-                            + "counter=1; "
-                            + "asttable " + str(ruta_star)
-                            + " | while read -r x_px y_px mag; do "
-                            + "astscript-psf-stamp " + str(ruta_seg_cut) + " "
-                            + "--mode=img "
-                            + "--center=$x_px,$y_px "
-                            + f"--normradii={norm_radii} "
-                            + f"--widthinpix={width_image} "
-                            + "--quiet "
-                            + f"--segment={ruta_seg_cut} "
-                            + f"--output={out_root}" + "_$counter.fits; "
-                            + "counter=$((counter+1)); "
-                            + "done; "
-                            + "} > /dev/null 2>&1"
+                            f"astscript-psf-select-stars {ruta_completa} "
+                            f"--magnituderange={mag_inf_lim},{mag_sup_lim} "
+                            f"--mindistdeg={min_dist} --output={ruta_star} "
+                            f"> /dev/null 2>&1"
                         )
 
+                        if not ruta_star.exists():
+                            print(f"[skip] no star catalog produced for {name_gal} {flt} {part}")
+                            continue
 
-                        # ---------------------------------------------------------------------
-                        # Post-process stamps in Python: if central pixel value < 0, flip stamp
-                        # ---------------------------------------------------------------------
-                        stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
-                        for stamp in stamp_list:
+                        # 2) mix with Gaia via nearest_position (faithful)
+                        print(f"\n ▸ Mixing with Gaia and applying HR/Mag cuts for {name_gal} {flt} {part}")
+                        try:
+                            hr_prueba = []
+                            mag_prueba = []
+                            ra_prueba = []
+                            dec_prueba = []
+
+                            hprueba = fits.open(ruta_star)
+                            tab = hprueba[1].data
+
+                            for num in range(0, len(tab)):
+                                ra = float(tab["ra"][num])
+                                dec = float(tab["dec"][num])
+                                mag = float(tab["phot_g_mean_mag"][num])
+
+                                pos_ra = self.nearest_position(ra, ra_gaia)
+                                pos_dec = self.nearest_position(dec, dec_gaia)
+
+                                if pos_ra == pos_dec:
+                                    ra_prueba.append(float(ra_gaia[pos_ra]))
+                                    dec_prueba.append(float(dec_gaia[pos_ra]))
+                                    hr_prueba.append(float(hr_gaia[pos_ra]))
+                                    mag_prueba.append(float(mag_gaia[pos_ra]))
+                                else:
+                                    ra_prueba.append(0.0)
+                                    dec_prueba.append(0.0)
+                                    hr_prueba.append(0.0)
+                                    mag_prueba.append(0.0)
+
+                            hr_prueba = np.array(hr_prueba)
+                            mag_prueba = np.array(mag_prueba)
+                            ra_prueba = np.array(ra_prueba)
+                            dec_prueba = np.array(dec_prueba)
+
+                            lim_mags_inf = mag_prueba > float(mag_inf_lim)
+                            lim_mags_upper = mag_prueba < float(mag_sup_lim)
+                            lim_mags = np.invert(lim_mags_inf ^ lim_mags_upper)
+
+                            hr_prueba = hr_prueba[lim_mags]
+                            mag_prueba = mag_prueba[lim_mags]
+                            ra_prueba = ra_prueba[lim_mags]
+                            dec_prueba = dec_prueba[lim_mags]
+
+                            bol_min2 = np.log10(hr_prueba) > lim_min
+                            bol_max2 = np.log10(hr_prueba) < lim_max
+                            bol2 = bol_max2 ^ bol_min2
+                            bol_selected2 = np.invert(bol2)
+
+                            mag_final_selected = mag_prueba[bol_selected2]
+                            hr_final_selected = hr_prueba[bol_selected2]
+                            ra_final_selected = ra_prueba[bol_selected2]
+                            dec_final_selected = dec_prueba[bol_selected2]
+
+                            # angular cut (faithful)
+                            ra_gal, dec_gal = obtain_coords(name_gal)
+                            galaxy_coord = SkyCoord(ra=ra_gal * u.degree, dec=dec_gal * u.degree)
+                            stars_coord = SkyCoord(ra=ra_final_selected * u.degree, dec=dec_final_selected * u.degree)
+                            angular_distance = stars_coord.separation(galaxy_coord)
+                            radius = selec_radii * u.arcminute
+                            mask = angular_distance <= radius
+
+                            ra_final_selected = ra_final_selected[mask]
+                            dec_final_selected = dec_final_selected[mask]
+                            mag_final_selected = mag_final_selected[mask]
+                            hr_final_selected = hr_final_selected[mask]
+
+                            # Save RA/DEC/MAG catalog (faithful)
+                            data_combined = np.zeros(
+                                len(mag_final_selected),
+                                dtype=[("ra", ">f8"), ("dec", ">f8"), ("phot_g_mean_mag", ">f8")],
+                            )
+                            data_combined["ra"] = ra_final_selected
+                            data_combined["dec"] = dec_final_selected
+                            data_combined["phot_g_mean_mag"] = mag_final_selected
+                            hprueba[1].header["NAXIS2"] = int(len(mag_final_selected))
+
+                            new_hdul = fits.HDUList(
+                                [
+                                    fits.PrimaryHDU(header=hprueba[0].header),
+                                    fits.BinTableHDU(data_combined, header=hprueba[1].header),
+                                ]
+                            )
+                            hprueba.close()
+                            new_hdul.writeto(ruta_star, overwrite=True)
+
+                            # Diagnostic plot (same content as original)
+                            diag_dir = _ensure_dir(self.dir_build / "Diagnostics")
+                            diag_path = diag_dir / f"{name_gal}_{flt}_{part}_mag_hr.jpg"
+                            self._save_diag_plot(
+                                diag_path,
+                                hr_gaia=hr_gaia,
+                                mag_gaia=mag_gaia,
+                                hr_gaia_select=hr_gaia_select,
+                                mag_gaia_select=mag_gaia_select,
+                                hr_branch=hr_branch,
+                                mag_branch=mag_branch,
+                                hr_final_selected=hr_final_selected,
+                                mag_final_selected=mag_final_selected,
+                                hr_prueba=hr_prueba,
+                                mag_prueba=mag_prueba,
+                                rejected_mask=~bol_selected2,
+                                min_value=float(min_value),
+                                agua_mean=float(np.mean(agua_2)),
+                                lim_min=float(lim_min),
+                                lim_max=float(lim_max),
+                                title=f"{name_gal} Filter {flt}",
+                            )
+
+                            if len(mag_final_selected) == 0:
+                                print(f"[skip] no stars after filters for {name_gal} {flt} {part}")
+                                continue
+
+                        except Exception as e:
+                            print(f"[skip] failure in Gaia/gnuastro mixing stage: {e}")
                             try:
-                                with fits.open(stamp, mode="update") as hdul:
-                                    # Robustly pick an image HDU
-                                    if len(hdul) > 1 and isinstance(hdul[1], fits.ImageHDU) and hdul[1].data is not None:
-                                        hdu = hdul[1]
-                                    else:
-                                        hdu = hdul[0]
-
-                                    img = hdu.data
-                                    if img is None or img.ndim != 2:
-                                        continue
-
-                                    cy = img.shape[0] // 2
-                                    cx = img.shape[1] // 2
-                                    vcen = img[cy, cx]
-
-                                    # Only flip if finite and negative
-                                    if np.isfinite(vcen) and (vcen < 0):
-                                        hdu.data = -img
-                                        hdul.flush()
-
+                                hprueba.close()
                             except Exception:
-                                # If something goes wrong, don't kill the pipeline; optionally delete the stamp
+                                pass
+                            continue
+
+                        # 3) recenter (faithful) + sigma configurable
+                        print(f"\n ▸ Recentering stars for {name_gal} {flt} {part} with sigma={self.center_sigma} and max_iter={self.center_max_iter}")
+                        try:
+                            h_center = fits.open(ruta_star)
+                            ra = h_center[1].data["ra"]
+                            dec = h_center[1].data["dec"]
+                            h_center.close()
+
+                            pixel_coords = wcs.world_to_pixel_values([r for r in ra], [d for d in dec])
+                            pixel_coords = np.array(pixel_coords).T
+
+                            y_new = []
+                            x_new = []
+                            for coord in tqdm(pixel_coords, desc=f"{name_gal} {part} centers", leave=False):
+                                x, y = int(coord[0]), int(coord[1])
+
                                 try:
-                                    stamp.unlink()
+                                    new_center = graph_interactive_center(
+                                        image_data,
+                                        (x, y),
+                                        False,
+                                        10,
+                                        sigma=self.center_sigma,
+                                        max_iter=self.center_max_iter,
+                                    )
+                                    y_new.append(float(new_center[0]))
+                                    x_new.append(float(new_center[1]))
                                 except Exception:
-                                    pass
+                                    y_new.append(float(y))
+                                    x_new.append(float(x))
 
-                        # ---------------------------------------------------------------------
-                        # Mask stamps (same as before)
-                        # ---------------------------------------------------------------------
-                        stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
-                        for stamp in stamp_list:
-                            try:
-                                self.masks_maker_inner(stamp)
-                            except Exception:
+                            y_new = np.array(y_new)
+                            x_new = np.array(x_new)
+
+                            data_xy = np.zeros(
+                                len(mag_final_selected),
+                                dtype=[("x_px", ">f8"), ("y_px", ">f8"), ("phot_g_mean_mag", ">f8")],
+                            )
+                            data_xy["x_px"] = x_new
+                            data_xy["y_px"] = y_new
+                            data_xy["phot_g_mean_mag"] = mag_final_selected
+
+                            fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(data_xy, name="STARS")]).writeto(
+                                ruta_star, overwrite=True
+                            )
+
+                        except Exception as e:
+                            print(f"[skip] center correction failed: {e}")
+                            continue
+
+                        # 4) stamps using seg-cutout as image and segment
+                        #    NEW: create stamps first; then in Python, if the *image value at the stamp center* is negative,
+                        #    multiply the whole stamp by -1 (without touching the center coordinates used for stamping).
+                        print(f"\n ▸ Stamping and masking for {name_gal} {flt} {part}")
+                        try:
+                            crops_root = _ensure_dir(self.dir_build / "Star_crops" / part)
+                            ruta_gal_folder = _ensure_dir(crops_root / f"{name_gal}_{flt}")
+
+                            out_base = name.replace(".fits", "")
+                            out_root = ruta_gal_folder / out_base
+                            ruta_out = str(out_root)  # used later for manual deletion block (kept close to original style)
+
+                            os.system(
+                                "{ "
+                                + "counter=1; "
+                                + "asttable " + str(ruta_star)
+                                + " | while read -r x_px y_px mag; do "
+                                + "astscript-psf-stamp " + str(ruta_seg_cut) + " "
+                                + "--mode=img "
+                                + "--center=$x_px,$y_px "
+                                + f"--normradii={norm_radii} "
+                                + f"--widthinpix={width_image} "
+                                + "--quiet "
+                                + f"--segment={ruta_seg_cut} "
+                                + f"--output={out_root}" + "_$counter.fits; "
+                                + "counter=$((counter+1)); "
+                                + "done; "
+                                + "} > /dev/null 2>&1"
+                            )
+
+
+                            # ---------------------------------------------------------------------
+                            # Post-process stamps in Python: if central pixel value < 0, flip stamp
+                            # ---------------------------------------------------------------------
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
                                 try:
-                                    stamp.unlink()
+                                    with fits.open(stamp, mode="update") as hdul:
+                                        # Robustly pick an image HDU
+                                        if len(hdul) > 1 and isinstance(hdul[1], fits.ImageHDU) and hdul[1].data is not None:
+                                            hdu = hdul[1]
+                                        else:
+                                            hdu = hdul[0]
+
+                                        img = hdu.data
+                                        if img is None or img.ndim != 2:
+                                            continue
+
+                                        cy = img.shape[0] // 2
+                                        cx = img.shape[1] // 2
+                                        vcen = img[cy, cx]
+
+                                        # Only flip if finite and negative
+                                        if np.isfinite(vcen) and (vcen < 0):
+                                            hdu.data = -img
+                                            hdul.flush()
+
                                 except Exception:
-                                    pass
+                                    # If something goes wrong, don't kill the pipeline; optionally delete the stamp
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
 
-                        # ---------------------------------------------------------------------
-                        # Ensure image data lives in HDU=1 (if it's in HDU=0, move it to HDU=1)
-                        # This avoids downstream tools failing with "HDU 0 has 0 dimensions".
-                        # ---------------------------------------------------------------------
-                        stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
-                        for stamp in stamp_list:
-                            try:
-                                with fits.open(stamp, mode="readonly") as hdul:
-                                    # Case A: HDU 1 exists and has image -> OK
-                                    if (
-                                        len(hdul) > 1
-                                        and isinstance(hdul[1], (fits.ImageHDU, fits.PrimaryHDU))
-                                        and hdul[1].data is not None
-                                        and getattr(hdul[1].data, "ndim", 0) == 2
-                                    ):
-                                        continue
-
-                                    # Case B: HDU 0 has the image -> move/copy to HDU 1
-                                    if (
-                                        len(hdul) >= 1
-                                        and isinstance(hdul[0], fits.PrimaryHDU)
-                                        and hdul[0].data is not None
-                                        and getattr(hdul[0].data, "ndim", 0) == 2
-                                    ):
-                                        img0 = np.array(hdul[0].data, copy=True)
-                                        hdr0 = hdul[0].header.copy()
-
-                                    else:
-                                        # Nothing usable
-                                        continue
-
-                                # Rewrite file: PrimaryHDU with header only (no data), ImageHDU with the data in ext=1
-                                # Keep original primary header keywords as much as possible.
-                                phdu = fits.PrimaryHDU(header=hdr0)
-                                ihdu = fits.ImageHDU(data=img0, name="IMAGE")
-                                new_hdul = fits.HDUList([phdu, ihdu])
-                                new_hdul.writeto(stamp, overwrite=True)
-
-                            except Exception:
+                            # ---------------------------------------------------------------------
+                            # Mask stamps (same as before)
+                            # ---------------------------------------------------------------------
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
                                 try:
-                                    stamp.unlink()
+                                    self.masks_maker_inner(stamp)
                                 except Exception:
-                                    pass
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
 
-                        # ---------------------------------------------------------------------
-                        # Manual visual inspection + deletion (as requested; DS9 via astscript-fits-view)
-                        # ---------------------------------------------------------------------
-                        print("\n ▸ Number of stars selected: ")
-                        os.system("echo " + str(ruta_gal_folder) + "/*" + flt + "*.fits | wc -w")
-                        pause = print("\n ▸ This is just a pause to perform a visual inspection of the stars")
+                            # ---------------------------------------------------------------------
+                            # Ensure image data lives in HDU=1 (if it's in HDU=0, move it to HDU=1)
+                            # This avoids downstream tools failing with "HDU 0 has 0 dimensions".
+                            # ---------------------------------------------------------------------
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
+                                try:
+                                    with fits.open(stamp, mode="readonly") as hdul:
+                                        # Case A: HDU 1 exists and has image -> OK
+                                        if (
+                                            len(hdul) > 1
+                                            and isinstance(hdul[1], (fits.ImageHDU, fits.PrimaryHDU))
+                                            and hdul[1].data is not None
+                                            and getattr(hdul[1].data, "ndim", 0) == 2
+                                        ):
+                                            continue
 
-                        ds9_process = subprocess.Popen(
-                            ["astscript-fits-view", str(ruta_gal_folder) + "/*" + flt + "*.fits"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        delete = input("\n ▸ Select the stars to delete if any: ")
-                        subprocess.run(["pkill", "-f", "ds9"])
+                                        # Case B: HDU 0 has the image -> move/copy to HDU 1
+                                        if (
+                                            len(hdul) >= 1
+                                            and isinstance(hdul[0], fits.PrimaryHDU)
+                                            and hdul[0].data is not None
+                                            and getattr(hdul[0].data, "ndim", 0) == 2
+                                        ):
+                                            img0 = np.array(hdul[0].data, copy=True)
+                                            hdr0 = hdul[0].header.copy()
 
-                        if len(delete) != 0:
-                            delete_list = np.array([int(num) for num in delete.split(",")])
-                            for ii in delete_list:
-                                if ii == 0:
-                                    ii = ""
-                                stack = ruta_out + "_" + str(ii) + ".fits"
-                                os.system("rm " + stack)
+                                        else:
+                                            # Nothing usable
+                                            continue
 
-                    except Exception as e:
-                        print(f"[skip] stamping/masking failed: {e}")
-                        continue
+                                    # Rewrite file: PrimaryHDU with header only (no data), ImageHDU with the data in ext=1
+                                    # Keep original primary header keywords as much as possible.
+                                    phdu = fits.PrimaryHDU(header=hdr0)
+                                    ihdu = fits.ImageHDU(data=img0, name="IMAGE")
+                                    new_hdul = fits.HDUList([phdu, ihdu])
+                                    new_hdul.writeto(stamp, overwrite=True)
 
-                    # 5) stack per galaxy + part
-                    print(f"\n ▸ Stacking for {name_gal} {flt} {part}")
-                    breakpoint()
-                    out_psf = _ensure_dir(self.psf_out_dir / name_gal / f"{name_gal}_{part}_{flt}")
-                    tag = f"{part}_{flt}_{name_gal}_{mag_inf_lim}_{mag_sup_lim}"
+                                except Exception:
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
 
-                    ok = False
-                    try:
-                        ok = self._stack_dir(ruta_gal_folder, out_psf, tag=tag)
-                    except Exception:
+                            # ---------------------------------------------------------------------
+                            # Manual visual inspection + deletion (as requested; DS9 via astscript-fits-view)
+                            # ---------------------------------------------------------------------
+                            print("\n ▸ Number of stars selected: ")
+                            os.system("echo " + str(ruta_gal_folder) + "/*" + flt + "*.fits | wc -w")
+                            pause = print("\n ▸ This is just a pause to perform a visual inspection of the stars")
+
+                            ds9_process = subprocess.Popen(
+                                ["astscript-fits-view", str(ruta_gal_folder) + "/*" + flt + "*.fits"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            delete = input("\n ▸ Select the stars to delete if any: ")
+                            subprocess.run(["pkill", "-f", "ds9"])
+
+                            if len(delete) != 0:
+                                delete_list = np.array([int(num) for num in delete.split(",")])
+                                for ii in delete_list:
+                                    if ii == 0:
+                                        ii = ""
+                                    stack = ruta_out + "_" + str(ii) + ".fits"
+                                    os.system("rm " + stack)
+
+                        except Exception as e:
+                            print(f"[skip] stamping/masking failed: {e}")
+                            continue
+
+                        # 5) stack per galaxy + part
+                        print(f"\n ▸ Stacking for {name_gal} {flt} {part}")
+                        
+                        out_psf = _ensure_dir(self.psf_out_dir / name_gal / f"{name_gal}_{part}_{flt}")
+                        tag = f"{part}_{flt}_{name_gal}_{mag_inf_lim}_{mag_sup_lim}"
+
                         ok = False
+                        try:
+                            ok = self._stack_dir(ruta_gal_folder, out_psf, tag=tag)
+                        except Exception:
+                            ok = False
 
-                    stack_path = out_psf / f"stack_{tag}.fits"
-                    prof_path = out_psf / f"profile_psf_{tag}.fits"
+                        stack_path = out_psf / f"stack_{tag}.fits"
+                        prof_path = out_psf / f"profile_psf_{tag}.fits"
 
-                    if ok and stack_path.exists():
-                        print(f"[ok] {name_gal} {flt} {part} stacked")
-                    else:
-                        # Si quieres, aquí puedes reportar qué faltó sin volcar el error completo:
-                        missing = []
-                        if not stack_path.exists():
-                            missing.append("stack")
-                        if not prof_path.exists():
-                            missing.append("profile")
-                        missing_str = ",".join(missing) if missing else "unknown"
-                        print(f"[skip] stacking failed ({missing_str})")
-                        continue
+                        if ok and stack_path.exists():
+                            print(f"[ok] {name_gal} {flt} {part} stacked")
+                        else:
+                            # Si quieres, aquí puedes reportar qué faltó sin volcar el error completo:
+                            missing = []
+                            if not stack_path.exists():
+                                missing.append("stack")
+                            if not prof_path.exists():
+                                missing.append("profile")
+                            missing_str = ",".join(missing) if missing else "unknown"
+                            print(f"[skip] stacking failed ({missing_str})")
+                            continue
+
+                # ==============================================================
+                # ============================== OUTER =========================
+                # ==============================================================
+                if do_outer:
+
+                    min_gaia = float(np.nanmin(mag_gaia_select))
+                    min_val  = float(min_value)
+
+                    if not np.isfinite(min_gaia) or not np.isfinite(min_val) or (min_val <= min_gaia):
+                        print(f"[skip] cannot build outer parts: min_val={min_val} min_gaia={min_gaia}")
+                        break
+
+                    # bins de 1 mag de ancho (máximo)
+                    start_edge = min_val
+                    n_bins = int(np.ceil(start_edge - min_gaia))
+                    if n_bins < 1:
+                        print(f"[skip] not enough mag range to define outer bins: min_val={min_val} min_gaia={min_gaia}")
+                        break
+
+                    edges = start_edge - np.arange(0, n_bins + 1, dtype=float)
+                    mag_sup_arr = edges[:-1]  # 13.7, 12.7, ...
+                    mag_inf_arr = edges[1:]   # 12.7, 11.7, ...
+
+                    upper_bounds_outer = mag_inf_arr  # mag_inf_lim
+                    lower_bounds_outer = mag_sup_arr  # mag_sup_lim
+                    outer_parts = [f"Outer_{k}" for k in range(1, len(upper_bounds_outer) + 1)]
+                    
+                    for i, part_outer in enumerate(outer_parts):
+                        mag_sup_lim = str(np.round(lower_bounds_outer[i], 1))
+                        mag_inf_lim = str(np.round(upper_bounds_outer[i], 1))
+
+                        # ----------------------------------------------------------
+                        # OUTER params (NEW):
+                        #   - base values from *_outer lists (index saturado)
+                        #   - then apply step_* multiplied by i (outer bin index)
+                        # ----------------------------------------------------------
+                        j0 = min(i, len(self.min_dist_outer) - 1)
+                        min_dist0 = float(self.min_dist_outer[j0])
+
+                        j1 = min(i, len(self.norm_radii_outer) - 1)
+                        nr_in0, nr_out0 = (float(x) for x in str(self.norm_radii_outer[j1]).split(","))
+
+                        j2 = min(i, len(self.width_image_outer) - 1)
+                        w_x0, w_y0 = (float(x) for x in str(self.width_image_outer[j2]).split(","))
+
+                        # apply steps
+                        min_dist = f"{(min_dist0 + i * self.step_min_dist_outer):.6f}"
+
+                        nr_in  = nr_in0  + i * self.step_norm_radii_outer[0]
+                        nr_out = nr_out0 + i * self.step_norm_radii_outer[1]
+                        norm_radii = f"{nr_in:.2f},{nr_out:.2f}".replace(".00", "")
+
+                        w_x = w_x0 + i * self.step_width_image_outer[0]
+                        w_y = w_y0 + i * self.step_width_image_outer[1]
+                        width_image = f"{int(round(w_x))},{int(round(w_y))}"
+
+                        # selection radius: puedes reutilizar el último/único, o mantener el de inner
+                        # aquí uso el último de inner (o el único si solo hay 1)
+                        selec_radii = float(self.selection_radii[min(i, len(self.selection_radii) - 1)])
+
+                        print(
+                            f"\n ▸ [OUTER] Building {part_outer} with mag limits {mag_inf_lim} - {mag_sup_lim} "
+                            f"and min_dist {min_dist}, norm_radii {norm_radii}, width {width_image}"
+                        )
+
+                        # 1) select stars (outer)
+                        dir_stars_outer = _ensure_dir(self.dir_build_outer / f"{part_outer}_stars")
+                        ruta_star = dir_stars_outer / name.replace(".fits", f"_{part_outer}_stars.fits")
+
+                        os.system(
+                            f"astscript-psf-select-stars {ruta_completa} "
+                            f"--magnituderange={mag_inf_lim},{mag_sup_lim} "
+                            f"--mindistdeg={min_dist} --output={ruta_star} "
+                            f"> /dev/null 2>&1"
+                        )
+                        if not ruta_star.exists():
+                            print(f"[skip] [OUTER] no star catalog produced for {name_gal} {flt} {part_outer}")
+                            continue
+
+                        # 2) mix con Gaia (idéntico a INNER hasta ra/dec/mag finales)
+                        print(f"\n ▸ [OUTER] Mixing with Gaia and applying Mag/Angular cuts for {name_gal} {flt} {part_outer}")
+                        try:
+                            hr_prueba = []
+                            mag_prueba = []
+                            ra_prueba = []
+                            dec_prueba = []
+
+                            hprueba = fits.open(ruta_star)
+                            tab = hprueba[1].data
+                            breakpoint()
+                            for num in range(0, len(tab)):
+                                ra = float(tab["ra"][num])
+                                dec = float(tab["dec"][num])
+                                mag = float(tab["phot_g_mean_mag"][num])
+
+                                pos_ra = self.nearest_position(ra, ra_gaia)
+                                pos_dec = self.nearest_position(dec, dec_gaia)
+                                _pos_mag = self.nearest_position(mag, mag_gaia)
+
+                                if pos_ra == pos_dec:
+                                    ra_prueba.append(float(ra_gaia[pos_ra]))
+                                    dec_prueba.append(float(dec_gaia[pos_ra]))
+                                    hr_prueba.append(float(hr_gaia[pos_ra]))
+                                    mag_prueba.append(float(mag_gaia[pos_ra]))
+                                else:
+                                    ra_prueba.append(0.0)
+                                    dec_prueba.append(0.0)
+                                    hr_prueba.append(0.0)
+                                    mag_prueba.append(0.0)
+
+                            hr_prueba = np.array(hr_prueba, dtype=float)
+                            mag_prueba = np.array(mag_prueba, dtype=float)
+                            ra_prueba = np.array(ra_prueba, dtype=float)
+                            dec_prueba = np.array(dec_prueba, dtype=float)
+
+                            # --- corte en magnitud del bin OUTER ---
+                            lim_mags_inf = mag_prueba > float(mag_inf_lim)
+                            lim_mags_upper = mag_prueba < float(mag_sup_lim)
+                            lim_mags = np.invert(lim_mags_inf ^ lim_mags_upper)
+                            breakpoint()
+                            hr_prueba = hr_prueba[lim_mags]
+                            mag_prueba = mag_prueba[lim_mags]
+                            ra_prueba = ra_prueba[lim_mags]
+                            dec_prueba = dec_prueba[lim_mags]
+                            breakpoint()
+                            # --- OUTER: NO HR 2-sigma filtering ---
+                            # (mantén todo lo que pase el corte en magnitud)
+                            mag_final_selected = mag_prueba
+                            hr_final_selected = hr_prueba
+                            ra_final_selected = ra_prueba
+                            dec_final_selected = dec_prueba
+                            bol_selected2 = np.full_like(mag_final_selected, True, dtype=bool)  # keep all after mag cut
+
+                            # --- corte angular ---
+                            ra_gal, dec_gal = obtain_coords(name_gal)
+                            galaxy_coord = SkyCoord(ra=ra_gal * u.degree, dec=dec_gal * u.degree)
+                            stars_coord = SkyCoord(ra=ra_final_selected * u.degree, dec=dec_final_selected * u.degree)
+                            angular_distance = stars_coord.separation(galaxy_coord)
+                            radius = selec_radii * u.arcminute
+                            mask = angular_distance <= radius
+
+                            ra_final_selected = ra_final_selected[mask]
+                            dec_final_selected = dec_final_selected[mask]
+                            mag_final_selected = mag_final_selected[mask]
+                            hr_final_selected = hr_final_selected[mask]
+
+                            if len(mag_final_selected) == 0:
+                                print(f"[skip] [OUTER] no stars after Mag/Angular cuts for {name_gal} {flt} {part_outer}")
+                                hprueba.close()
+                                #Diagnostic plot (same content as original)
+                                diag_dir = _ensure_dir(self.dir_build_outer / "Diagnostics")
+                                diag_path = diag_dir / f"{name_gal}_{flt}_{part_outer}_mag_hr.jpg"
+                                self._save_diag_plot(
+                                    diag_path,
+                                    hr_gaia=hr_gaia,
+                                    mag_gaia=mag_gaia,
+                                    hr_gaia_select=hr_gaia_select,
+                                    mag_gaia_select=mag_gaia_select,
+                                    hr_branch=hr_branch,
+                                    mag_branch=mag_branch,
+                                    hr_final_selected=hr_final_selected,
+                                    mag_final_selected=mag_final_selected,
+                                    hr_prueba=hr_prueba,
+                                    mag_prueba=mag_prueba,
+                                    rejected_mask=~bol_selected2,
+                                    min_value=float(min_value),
+                                    agua_mean=float(np.mean(agua_2)),
+                                    lim_min=float(lim_min),
+                                    lim_max=float(lim_max),
+                                    title=f"{name_gal} Filter {flt} {part_outer}",
+                                )
+                                continue
+
+                            hprueba.close()
+                            
+                            #Diagnostic plot (same content as original)
+                            diag_dir = _ensure_dir(self.dir_build_outer / "Diagnostics")
+                            diag_path = diag_dir / f"{name_gal}_{flt}_{part_outer}_mag_hr.jpg"
+                            self._save_diag_plot(
+                                diag_path,
+                                hr_gaia=hr_gaia,
+                                mag_gaia=mag_gaia,
+                                hr_gaia_select=hr_gaia_select,
+                                mag_gaia_select=mag_gaia_select,
+                                hr_branch=hr_branch,
+                                mag_branch=mag_branch,
+                                hr_final_selected=hr_final_selected,
+                                mag_final_selected=mag_final_selected,
+                                hr_prueba=hr_prueba,
+                                mag_prueba=mag_prueba,
+                                rejected_mask=~bol_selected2,
+                                min_value=float(min_value),
+                                agua_mean=float(np.mean(agua_2)),
+                                lim_min=float(lim_min),
+                                lim_max=float(lim_max),
+                                title=f"{name_gal} Filter {flt} {part_outer}",
+                            )
+                            # 3) OUTER: NO recenter. Gaia RA/DEC -> pix directamente
+                            xpix, ypix = wcs.world_to_pixel_values(
+                                ra_final_selected.astype(float),
+                                dec_final_selected.astype(float),
+                            )
+                            xpix = np.array(xpix, dtype=float)
+                            ypix = np.array(ypix, dtype=float)
+
+                            data_xy = np.zeros(
+                                len(mag_final_selected),
+                                dtype=[("x_px", ">f8"), ("y_px", ">f8"), ("phot_g_mean_mag", ">f8")],
+                            )
+                            data_xy["x_px"] = xpix
+                            data_xy["y_px"] = ypix
+                            data_xy["phot_g_mean_mag"] = mag_final_selected
+
+                            fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(data_xy, name="STARS")]).writeto(
+                                ruta_star, overwrite=True
+                            )
+                            hprueba.close()
+
+                        except Exception as e:
+                            print(f"[skip] [OUTER] failure in Gaia/gnuastro mixing stage: {e}")
+                            try:
+                                hprueba.close()
+                            except Exception:
+                                pass
+                            continue
+
+                        # 4) stamping/masking OUTER
+                        print(f"\n ▸ [OUTER] Stamping and masking for {name_gal} {flt} {part_outer}")
+                        try:
+                            crops_root = _ensure_dir(self.dir_build_outer / "Star_crops" / part_outer)
+                            ruta_gal_folder = _ensure_dir(crops_root / f"{name_gal}_{flt}")
+
+                            out_base = name.replace(".fits", "")
+                            out_root = ruta_gal_folder / out_base
+                            ruta_out = str(out_root)
+
+                            os.system(
+                                "{ "
+                                + "counter=1; "
+                                + "asttable " + str(ruta_star)
+                                + " | while read -r x_px y_px mag; do "
+                                + "astscript-psf-stamp " + str(ruta_seg_cut) + " "
+                                + "--mode=img "
+                                + "--center=$x_px,$y_px "
+                                + f"--normradii={norm_radii} "
+                                + f"--widthinpix={width_image} "
+                                + "--quiet "
+                                + f"--segment={ruta_seg_cut} "
+                                + f"--output={out_root}" + "_$counter.fits; "
+                                + "counter=$((counter+1)); "
+                                + "done; "
+                                + "} > /dev/null 2>&1"
+                            )
+
+                            # flip si pixel central negativo
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
+                                try:
+                                    with fits.open(stamp, mode="update") as hdul:
+                                        if len(hdul) > 1 and isinstance(hdul[1], fits.ImageHDU) and hdul[1].data is not None:
+                                            hdu = hdul[1]
+                                        else:
+                                            hdu = hdul[0]
+                                        img = hdu.data
+                                        if img is None or img.ndim != 2:
+                                            continue
+                                        cy = img.shape[0] // 2
+                                        cx = img.shape[1] // 2
+                                        vcen = img[cy, cx]
+                                        if np.isfinite(vcen) and (vcen < 0):
+                                            hdu.data = -img
+                                            hdul.flush()
+                                except Exception:
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
+
+                            # masks (outer)
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
+                                try:
+                                    self.masks_maker_outer(stamp)
+                                except Exception:
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
+
+                            # enforce data in HDU=1
+                            stamp_list = [p for p in ruta_gal_folder.iterdir() if p.is_file() and p.suffix == ".fits"]
+                            for stamp in stamp_list:
+                                try:
+                                    with fits.open(stamp, mode="readonly") as hdul:
+                                        if len(hdul) > 1 and hdul[1].data is not None and getattr(hdul[1].data, "ndim", 0) == 2:
+                                            continue
+                                        if len(hdul) >= 1 and hdul[0].data is not None and getattr(hdul[0].data, "ndim", 0) == 2:
+                                            img0 = np.array(hdul[0].data, copy=True)
+                                            hdr0 = hdul[0].header.copy()
+                                        else:
+                                            continue
+                                    phdu = fits.PrimaryHDU(header=hdr0)
+                                    ihdu = fits.ImageHDU(data=img0, name="IMAGE")
+                                    fits.HDUList([phdu, ihdu]).writeto(stamp, overwrite=True)
+                                except Exception:
+                                    try:
+                                        stamp.unlink()
+                                    except Exception:
+                                        pass
+
+                            # ---------------------------------------------------------------------
+                            # Manual visual inspection + deletion (OUTER)  [NEW: integrado aquí]
+                            # ---------------------------------------------------------------------
+                            print("\n ▸ Number of stars selected: ")
+                            os.system("echo " + str(ruta_gal_folder) + "/*" + flt + "*.fits | wc -w")
+                            pause = print("\n ▸ This is just a pause to perform a visual inspection of the stars")
+
+                            ds9_process = subprocess.Popen(
+                                ["astscript-fits-view", str(ruta_gal_folder) + "/*" + flt + "*.fits"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            delete = input("\n ▸ Select the stars to delete if any: ")
+                            subprocess.run(["pkill", "-f", "ds9"])
+
+                            if len(delete) != 0:
+                                delete_list = np.array([int(num) for num in delete.split(",")])
+                                for ii in delete_list:
+                                    if ii == 0:
+                                        ii = ""
+                                    stack = ruta_out + "_" + str(ii) + ".fits"
+                                    os.system("rm " + stack)
+
+                        except Exception as e:
+                            print(f"[skip] [OUTER] stamping/masking failed: {e}")
+                            continue
+
+                        # 5) stack OUTER
+                        print(f"\n ▸ [OUTER] Stacking for {name_gal} {flt} {part_outer}")
+                        out_psf = _ensure_dir(self.psf_out_dir_outer / name_gal / f"{name_gal}_{part_outer}_{flt}")
+                        tag = f"{part_outer}_{flt}_{name_gal}_{mag_inf_lim}_{mag_sup_lim}"
+
+                        ok = False
+                        try:
+                            ok = self._stack_dir(ruta_gal_folder, out_psf, tag=tag)
+                        except Exception:
+                            ok = False
+
+                        stack_path = out_psf / f"stack_{tag}.fits"
+                        prof_path = out_psf / f"profile_psf_{tag}.fits"
+
+                        if ok and stack_path.exists() and prof_path.exists():
+                            print(f"[ok] [OUTER] {name_gal} {flt} {part_outer} stacked")
+                        else:
+                            missing = []
+                            if not stack_path.exists():
+                                missing.append("stack")
+                            if not prof_path.exists():
+                                missing.append("profile")
+                            print(f"[skip] [OUTER] stacking failed ({','.join(missing) if missing else 'unknown'})")
+                            continue

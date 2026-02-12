@@ -19,6 +19,9 @@ from masking import make_masks
 from making_catalogs import make_catalogs
 from psf_builder import PSFBuilder
 
+# NEW: PSF joiner (interactive)
+from psf_joint import main as psf_joint_main
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -97,7 +100,7 @@ def parse_args():
         help="Selection radius (arcmin) per part.",
     )
 
-    # NEW: center-refinement params (wired to PSFBuilder -> graph_interactive_center)
+    # Center-refinement params (wired to PSFBuilder -> graph_interactive_center)
     parser.add_argument(
         "--psf-center-sigma",
         type=float,
@@ -159,6 +162,76 @@ def parse_args():
              "If omitted, defaults in psf_builder.py are used.",
     )
 
+    # -------------------------------------------------------------------------
+    # NEW: OUTER bin configuration (base + per-bin steps)
+    # -------------------------------------------------------------------------
+    parser.add_argument(
+        "--psf-min-dist-outer",
+        default="0.015",
+        help="OUTER: base mindistdeg. Either a single value or comma-separated list.",
+    )
+    parser.add_argument(
+        "--psf-norm-radii-outer",
+        default="40,80",
+        help="OUTER: base normradii 'rin,rout'. Either a single pair or semicolon-separated list.",
+    )
+    parser.add_argument(
+        "--psf-width-image-outer",
+        default="1600,1600",
+        help="OUTER: base widthinpix 'x,y'. Either a single pair or semicolon-separated list.",
+    )
+    parser.add_argument(
+        "--psf-step-min-dist-outer",
+        type=float,
+        default=0.0,
+        help="OUTER: increment added to mindistdeg per outer bin (default: 0.0).",
+    )
+    parser.add_argument(
+        "--psf-step-norm-radii-outer",
+        default="0,0",
+        help="OUTER: per-bin increment for normradii as 'd_rin,d_rout' (default: 0,0).",
+    )
+    parser.add_argument(
+        "--psf-step-width-image-outer",
+        default="0,0",
+        help="OUTER: per-bin increment for widthinpix as 'd_x,d_y' (default: 0,0).",
+    )
+
+    # -------------------------------------------------------------------------
+    # PSF JOINING (interactive)
+    # Uses existing --dir and --filters to infer galaxy/filter.
+    # -------------------------------------------------------------------------
+    parser.add_argument(
+        "--join-psf",
+        action="store_true",
+        help="Open the interactive PSF joiner (psf_joint.py).",
+    )
+    parser.add_argument(
+        "--join-inner-root",
+        default="./PSF_files/Inner_parts",
+        help="Root directory containing INNER PSF outputs.",
+    )
+    parser.add_argument(
+        "--join-outer-root",
+        default="./PSF_files/Outer_parts",
+        help="Root directory containing OUTER PSF outputs.",
+    )
+    parser.add_argument(
+        "--join-external-outer-stack",
+        default=None,
+        help="Optional external OUTER 2D stack FITS.",
+    )
+    parser.add_argument(
+        "--join-external-outer-profile",
+        default=None,
+        help="Optional external OUTER radial profile FITS.",
+    )
+    parser.add_argument(
+        "--join-circular-radius",
+        type=int,
+        default=None,
+        help="Radius (px) for the final circular PSF made by psf_joint (must be ODD). Example: 6801.",
+    )
     return parser.parse_args()
 
 
@@ -173,6 +246,22 @@ def _parse_list_csv(s: str) -> list[str]:
 def _parse_pairs_semicolon(s: str) -> list[str]:
     # "5,10;10,20;20,40" -> ["5,10","10,20","20,40"]
     return [x.strip() for x in s.split(";") if x.strip()]
+
+
+def _parse_float_pair_csv(s: str) -> tuple[float, float]:
+    a, b = [x.strip() for x in s.split(",")]
+    return float(a), float(b)
+
+
+def _infer_galaxy_from_dir(input_dir: Path) -> str | None:
+    # Try to infer galaxy name as first token before '_' from first FITS file in dir.
+    try:
+        fits_files = sorted([p.name for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() == ".fits"])
+        if not fits_files:
+            return None
+        return fits_files[0].split("_")[0]
+    except Exception:
+        return None
 
 
 def main():
@@ -242,6 +331,15 @@ def main():
         width_image = _parse_pairs_semicolon(args.psf_width_image)
         selection_radii = [float(x) for x in _parse_list_csv(args.psf_selection_radii)]
 
+        # OUTER base lists (allow single or list)
+        min_dist_outer = _parse_list_csv(args.psf_min_dist_outer)
+        norm_radii_outer = _parse_pairs_semicolon(args.psf_norm_radii_outer)
+        width_image_outer = _parse_pairs_semicolon(args.psf_width_image_outer)
+
+        # OUTER step pairs
+        step_norm_radii_outer = _parse_float_pair_csv(args.psf_step_norm_radii_outer)
+        step_width_image_outer = _parse_float_pair_csv(args.psf_step_width_image_outer)
+
         psf_nc_inner = shlex.split(args.psf_nc_inner_params) if args.psf_nc_inner_params else None
         psf_seg_inner = shlex.split(args.psf_seg_inner_params) if args.psf_seg_inner_params else None
         psf_nc_outer = shlex.split(args.psf_nc_outer_params) if args.psf_nc_outer_params else None
@@ -251,24 +349,80 @@ def main():
             filters=filters,
             directorio=input_dir,
             select_parts=args.psf_select_parts,
+
+            # INNER
             parts=parts,
             min_dist=min_dist,
             norm_radii=norm_radii,
             width_image=width_image,
             selection_radii_arcmin=selection_radii,
+
             # Branch selection:
             branch_mag_min=args.psf_branch_mag_min,
             branch_mag_max=args.psf_branch_mag_max,
-            # Masking params for stamps:
+
+            # Masking params:
             nc_inner_args=psf_nc_inner,
             seg_inner_args=psf_seg_inner,
             nc_outer_args=psf_nc_outer,
             seg_outer_args=psf_seg_outer,
-            # NEW: center-refinement params:
+
+            # Center-refinement params (INNER):
             center_sigma=args.psf_center_sigma,
             center_max_iter=args.psf_center_max_iter,
+
+            # OUTER (NEW):
+            min_dist_outer=min_dist_outer,
+            norm_radii_outer=norm_radii_outer,
+            width_image_outer=width_image_outer,
+            step_min_dist_outer=args.psf_step_min_dist_outer,
+            step_norm_radii_outer=step_norm_radii_outer,
+            step_width_image_outer=step_width_image_outer,
         )
         builder.build()
+
+    # -------------------------------------------------------------------------
+    # PSF JOINING (interactive)
+    # -------------------------------------------------------------------------
+    if args.join_psf:
+        join_filter = filters[0] if filters else None
+        if join_filter is None:
+            raise SystemExit("--filters is required when using --join-psf")
+
+        # Galaxy name: sólo si el usuario lo pide
+        gal = None
+        if args.join_galaxy_from_dir:
+            gal = _infer_galaxy_from_dir(input_dir)
+            if gal is None:
+                raise SystemExit("Could not infer galaxy from --dir (no FITS found).")
+
+        # Si no infiere, asume que --dir YA ES el nombre de galaxia (tu comportamiento original)
+        gal = gal if gal is not None else str(args.dir)
+
+        argv = [
+            "psf_joint.py",
+            "--dir", str(gal),                      # psf_joint espera galaxy name aquí
+            "--filter", str(join_filter),
+            "--inner-root", str(args.join_inner_root),
+            "--outer-root", str(args.join_outer_root),
+        ]
+
+        if args.join_external_outer_stack:
+            argv += ["--external-outer-stack", str(args.join_external_outer_stack)]
+        if args.join_external_outer_profile:
+            argv += ["--external-outer-profile", str(args.join_external_outer_profile)]
+
+        # NUEVO: circular radius (si quieres circularizar / powerlaw)
+        if args.join_circular_radius is not None:
+            argv += ["--circular-radius", str(int(args.join_circular_radius))]
+            argv += ["--export-circular"]  # activa export dentro de psf_joint
+
+        old_argv = sys.argv
+        try:
+            sys.argv = argv
+            psf_joint_main()
+        finally:
+            sys.argv = old_argv
 
 
 if __name__ == "__main__":

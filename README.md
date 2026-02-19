@@ -97,6 +97,16 @@ python3 lisan.py \
   --build-psf
 
 ```
+## 5️⃣ Joint the PSF
+
+In this part the different parts of the PSF are all joint together using an interactive window.
+```
+python3 lisan.py \
+  --dir ./data/cutouts \
+  --filters g,r \
+  --join-psf \
+  --join-circular-radius 1001
+```
 ## 📁 Directory Structure
 LISAN/
 
@@ -136,7 +146,7 @@ LISAN relies on:
 - matplotlib  
 - pandas  
 - tqdm  
-- **Gnuastro** (`astnoisechisel`, `astsegment`, `astscript-psf-stamp`, `astarithmetic`)
+- **Gnuastro 0.23** (`astnoisechisel`, `astsegment`, `astscript-psf-stamp`, `astarithmetic`)
 
 ## 📄 License
 

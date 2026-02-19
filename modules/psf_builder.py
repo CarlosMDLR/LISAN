@@ -1152,7 +1152,7 @@ class PSFBuilder:
 
                             hprueba = fits.open(ruta_star)
                             tab = hprueba[1].data
-                            breakpoint()
+                            
                             for num in range(0, len(tab)):
                                 ra = float(tab["ra"][num])
                                 dec = float(tab["dec"][num])
@@ -1182,12 +1182,12 @@ class PSFBuilder:
                             lim_mags_inf = mag_prueba > float(mag_inf_lim)
                             lim_mags_upper = mag_prueba < float(mag_sup_lim)
                             lim_mags = np.invert(lim_mags_inf ^ lim_mags_upper)
-                            breakpoint()
+                            
                             hr_prueba = hr_prueba[lim_mags]
                             mag_prueba = mag_prueba[lim_mags]
                             ra_prueba = ra_prueba[lim_mags]
                             dec_prueba = dec_prueba[lim_mags]
-                            breakpoint()
+                            
                             # --- OUTER: NO HR 2-sigma filtering ---
                             # (mantén todo lo que pase el corte en magnitud)
                             mag_final_selected = mag_prueba

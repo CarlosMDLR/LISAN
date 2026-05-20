@@ -157,7 +157,7 @@ This project is released under the **MIT License**.
 Development supported by the **Instituto de Astrofísica de Canarias (IAC)**.  
 Stellar catalogues are based on data from **Gaia DR3**.
 
-If you use LISAN in your work, please cite the forthcoming associated paper and credit this repository.
+If you use LISAN in your work, please cite the associated papers Marrero-de la Rosa et al. 2026 (DOI: https://doi.org/10.1051/0004-6361/202557193) and Marrero-de la Rosa et al. (in prep.), and credit this repository.
 
 
 

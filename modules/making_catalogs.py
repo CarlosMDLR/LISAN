@@ -49,31 +49,6 @@ def make_catalogs(
 ) -> None:
     """
     Build catalogs and Gaia matches for all FITS images in input_dir for each filter.
-
-    Parameters
-    ----------
-    input_dir : Path
-        Directory with galaxy FITS cutouts.
-    filters : Iterable[str]
-        Filters to process (e.g. ["g", "r"]).
-    output_dir : Path
-        Base output directory for products.
-    zeropoint : float
-        Zeropoint passed to astmkcatalog.
-    noisechisel_args : list[str], optional
-        Extra args for astnoisechisel (defaults mimic your original).
-    segment_args : list[str], optional
-        Extra args for astsegment (defaults mimic your original, using a gaussian kernel).
-    aperture_arcsec : float
-        Matching aperture in arcsec for astmatch (catalog vs Gaia).
-    gaia_dataset : str
-        Gaia dataset for astquery (e.g. "dr3").
-    gaia_sigma : float
-        Sigma threshold for parallax/PM filtering (default 3).
-    make_plots : bool
-        If True, generate mag vs half-sum-radius plots.
-    show_progress : bool
-        If True, show tqdm progress.
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -94,7 +69,7 @@ def make_catalogs(
             "--minnumfalse=1",
         ]
 
-    # Kernel file (created once)
+    # Kernel file
     kernel_fat = output_dir / "kernel_fat.fits"
     if not kernel_fat.exists():
         _run([
@@ -115,9 +90,7 @@ def make_catalogs(
             "--keepmaxnearriver",
         ]
 
-    # Process per filter
     for flt in filters:
-        # Match files like "...<filter>...fits" (same spirit as original)
         pat = re.compile(rf"{re.escape(flt)}.*\.fits$", re.IGNORECASE)
         files = sorted([p for p in input_dir.iterdir() if p.is_file() and pat.search(p.name)])
         if not files:
@@ -130,6 +103,7 @@ def make_catalogs(
             dir_plots.mkdir(parents=True, exist_ok=True)
 
         it = tqdm(files, desc=f"Catalogs {flt}", disable=not show_progress)
+
         for image in it:
             obj = image.name.split("_")[0]
 
@@ -144,7 +118,7 @@ def make_catalogs(
                 *noisechisel_args,
             ])
 
-            # 2) Segment (use INPUT-NO-SKY HDU like original)
+            # 2) Segment
             _run([
                 "astsegment",
                 str(nc_out),
@@ -175,7 +149,7 @@ def make_catalogs(
                 f"--output={cat_fits}",
             ])
 
-            # 4) Gaia query over the image footprint
+            # 4) Gaia query
             gaia_fits = dir_gaia / f"{obj}_gaia_{flt}.fits"
             _run([
                 "astquery",
@@ -200,12 +174,16 @@ def make_catalogs(
                 f"--output={match_fits}",
             ])
 
-            # 6) Filter + plots (optional)
+            # 6) Filter + plots
             if not make_plots:
                 continue
 
+            # IMPORTANT:
+            # The Gaia matching is done against HDU="CLUMPS".
+            # Therefore, the black detections in the diagnostic plot must also
+            # come from the CLUMPS extension.
             with fits.open(cat_fits) as hd:
-                d = hd[1].data
+                d = hd["CLUMPS"].data
                 mag = d["MAGNITUDE"]
                 hr = d["HALF_SUM_RADIUS"]
 
@@ -214,7 +192,7 @@ def make_catalogs(
                 mag_gaia = d1["MAGNITUDE"]
                 hr_gaia = d1["HALF_SUM_RADIUS"]
 
-                dq = hd[2].data  # QUERY
+                dq = hd[2].data
                 par = dq["parallax"]
                 par_e = dq["parallax_error"]
                 pmra = dq["pmra"]
@@ -223,7 +201,7 @@ def make_catalogs(
                 pmdec_e = dq["pmdec_error"]
                 magG = dq["phot_g_mean_mag"]
 
-            # Criteria (same logic, but parameterized by gaia_sigma)
+            # Gaia parallax / proper-motion selection
             bol_par = par >= gaia_sigma * par_e
             cond_pm = (
                 (~np.isnan(pmra) & (np.abs(pmra) >= gaia_sigma * pmra_e))
@@ -235,11 +213,24 @@ def make_catalogs(
             hr_gaia_sel = hr_gaia[sel]
             magG_sel = magG[sel]
 
-            # Plot 1: detections + Gaia (filter mag)
+            # Plot 1: detections + Gaia in image/filter magnitude
             fig, ax = plt.subplots()
             ax.plot(np.log10(hr), mag, "k.", label="Detections")
-            ax.plot(np.log10(hr_gaia), mag_gaia, "ro", markerfacecolor="none", label="Gaia detections")
-            ax.plot(np.log10(hr_gaia_sel), mag_gaia_sel, "gs", markersize=3, label=f"Gaia ({gaia_sigma}σ par/PM)")
+            ax.plot(
+                np.log10(hr_gaia),
+                mag_gaia,
+                "ro",
+                markerfacecolor="none",
+                label="Gaia detections",
+            )
+            ax.plot(
+                np.log10(hr_gaia_sel),
+                mag_gaia_sel,
+                "gs",
+                markersize=3,
+                label=rf"Gaia ({gaia_sigma} $\sigma$ par/PM)",
+            )
+
             ax.set_xlabel("log(Half sum radius [px])", fontsize=18)
             ax.set_ylabel(f"Magnitude in {flt} filter", fontsize=18)
             ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -247,13 +238,32 @@ def make_catalogs(
             ax.tick_params(direction="in", which="minor", length=4)
             ax.set_title(f"{obj} Filter {flt}")
             ax.legend(loc="best")
-            fig.savefig(dir_plots / f"{obj}_{flt}.jpg", bbox_inches="tight", pad_inches=0.05, dpi=400)
+
+            fig.savefig(
+                dir_plots / f"{obj}_{flt}.jpg",
+                bbox_inches="tight",
+                pad_inches=0.05,
+                dpi=400,
+            )
             plt.close(fig)
 
-            # Plot 2: Gaia G band
+            # Plot 2: Gaia G-band magnitude
             fig, ax = plt.subplots()
-            ax.plot(np.log10(hr_gaia), magG, "ro", markerfacecolor="none", label="Gaia detections")
-            ax.plot(np.log10(hr_gaia_sel), magG_sel, "gs", markersize=3, label=f"Gaia ({gaia_sigma}σ par/PM)")
+            ax.plot(
+                np.log10(hr_gaia),
+                magG,
+                "ro",
+                markerfacecolor="none",
+                label="Gaia detections",
+            )
+            ax.plot(
+                np.log10(hr_gaia_sel),
+                magG_sel,
+                "gs",
+                markersize=3,
+                label=rf"Gaia ({gaia_sigma} $\sigma$ par/PM)",
+            )
+
             ax.set_xlabel("log(Half sum radius [px])", fontsize=18)
             ax.set_ylabel("Magnitude in Gaia G band", fontsize=18)
             ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -261,5 +271,11 @@ def make_catalogs(
             ax.tick_params(direction="in", which="minor", length=4)
             ax.set_title(f"{obj} Filter {flt}")
             ax.legend(loc="best")
-            fig.savefig(dir_plots / f"{obj}_{flt}_G_band.jpg", bbox_inches="tight", pad_inches=0.05, dpi=400)
+
+            fig.savefig(
+                dir_plots / f"{obj}_{flt}_G_band.jpg",
+                bbox_inches="tight",
+                pad_inches=0.05,
+                dpi=400,
+            )
             plt.close(fig)

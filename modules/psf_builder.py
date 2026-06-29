@@ -458,7 +458,7 @@ class PSFBuilder:
         mag_prueba: np.ndarray,
         rejected_mask: np.ndarray,
         min_value: float,
-        agua_mean: float,
+        log_hr_branch_mean: float,
         lim_min: float,
         lim_max: float,
         title: str,
@@ -478,7 +478,7 @@ class PSFBuilder:
         ax.set_ylabel("Magnitude in Gaia G-band", fontsize=18)
 
         ax.axhline(min_value)
-        ax.axvline(agua_mean, lw=2, color="k", ls="--")
+        ax.axvline(log_hr_branch_mean, lw=2, color="k", ls="--")
         ax.axvline(lim_min, color="k", lw=2, ls="--")
         ax.axvline(lim_max, color="k", lw=2, ls="--")
         ax.axvspan(lim_min, lim_max, alpha=0.5, color="gray")
@@ -638,14 +638,14 @@ class PSFBuilder:
                 bol_mag_gaia_max = mag_gaia_select < self.branch_mag_max
                 bol_mag_gaia = np.invert(bol_mag_gaia_max ^ bol_mag_gaia_min)
 
-                agua = sigma_clip(np.log10(hr_gaia_select[bol_mag_gaia]), 2)
-                agua_2 = agua.data[np.invert(agua.mask)]
-                if agua_2.size == 0:
+                clipped_log_hr_branch = sigma_clip(np.log10(hr_gaia_select[bol_mag_gaia]), 2)
+                clipped_log_hr_branch_values = clipped_log_hr_branch.data[np.invert(clipped_log_hr_branch.mask)]
+                if clipped_log_hr_branch_values.size == 0:
                     print("[skip] empty branch mag-window after sigma_clip")
                     continue
 
-                lim_min = np.mean(agua_2) - 2 * np.std(agua_2)
-                lim_max = np.mean(agua_2) + 2 * np.std(agua_2)
+                lim_min = np.mean(clipped_log_hr_branch_values) - 2 * np.std(clipped_log_hr_branch_values)
+                lim_max = np.mean(clipped_log_hr_branch_values) + 2 * np.std(clipped_log_hr_branch_values)
 
                 bol_min = np.log10(hr_gaia_select) > lim_min
                 bol_max = np.log10(hr_gaia_select) < lim_max
@@ -819,7 +819,7 @@ class PSFBuilder:
                                 mag_prueba=mag_prueba,
                                 rejected_mask=~bol_selected2,
                                 min_value=float(min_value),
-                                agua_mean=float(np.mean(agua_2)),
+                                log_hr_branch_mean=float(np.mean(clipped_log_hr_branch_values)),
                                 lim_min=float(lim_min),
                                 lim_max=float(lim_max),
                                 title=f"{name_gal} Filter {flt}",
@@ -1229,7 +1229,7 @@ class PSFBuilder:
                                     mag_prueba=mag_prueba,
                                     rejected_mask=~bol_selected2,
                                     min_value=float(min_value),
-                                    agua_mean=float(np.mean(agua_2)),
+                                    log_hr_branch_mean=float(np.mean(clipped_log_hr_branch_values)),
                                     lim_min=float(lim_min),
                                     lim_max=float(lim_max),
                                     title=f"{name_gal} Filter {flt} {part_outer}",
@@ -1255,7 +1255,7 @@ class PSFBuilder:
                                 mag_prueba=mag_prueba,
                                 rejected_mask=~bol_selected2,
                                 min_value=float(min_value),
-                                agua_mean=float(np.mean(agua_2)),
+                                log_hr_branch_mean=float(np.mean(clipped_log_hr_branch_values)),
                                 lim_min=float(lim_min),
                                 lim_max=float(lim_max),
                                 title=f"{name_gal} Filter {flt} {part_outer}",

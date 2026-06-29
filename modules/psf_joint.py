@@ -225,7 +225,7 @@ def load_lisan_parts(
         if not root.exists():
             return []
         return sorted([p for p in root.rglob("*") if p.is_dir() and re.search(pattern, str(p))])
-
+    
     gal_inner_dir = inner_root / gal
     gal_outer_dir = outer_root / gal
 
@@ -243,7 +243,7 @@ def load_lisan_parts(
         inner_dirs = _collect(inner_root, rf"{re.escape(gal)}_.*_{re.escape(flt)}$")
     if not outer_dirs:
         outer_dirs = _collect(outer_root, rf"{re.escape(gal)}_.*_{re.escape(flt)}$")
-
+    breakpoint()
     # Helper to build PSFPart from dir
     def _make_part_from_dir(d: Path) -> Optional[PSFPart]:
         prof, stack = _find_profile_and_stack(d)
@@ -1498,13 +1498,14 @@ def main():
     # -----------------------
     # Load parts
     # -----------------------
+    
     parts = load_lisan_parts(
         gal=str(args.dir),
         flt=str(args.filter),
         inner_root=Path(args.inner_root),
         outer_root=Path(args.outer_root),
     )
-
+    
     ext = load_external_outer(
         external_stack=Path(args.external_outer_stack) if args.external_outer_stack else None,
         external_profile=Path(args.external_outer_profile) if args.external_outer_profile else None,

@@ -36,6 +36,26 @@ The resulting PSFs are fully data-driven and suitable for low surface-brightness
 LISAN is a **multi-stage pipeline** executed from the command line.  
 Each stage produces intermediate products required by the following steps.
 
+## 📦 Installation and Dependencies
+
+## Installation
+
+It is recommended to use a dedicated Python virtual environment to run LISAN.
+
+# Create a virtual environment
+
+```bash
+python3 -m venv lisan_env
+source lisan_env/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+This project also requires GNU Astronomy Utilities (Gnuastro), which provides
+astnoisechisel, astsegment, astscript-psf-*, and related tools.
+Please install Gnuastro on your system following the instructions from the official documentation.
+---
+
 ### Recommended execution order
 
 1. Measure image depth  

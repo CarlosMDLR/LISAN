@@ -12,7 +12,6 @@ The current implementation has been developed primarily for **INT/WFC** imaging,
 
 ## Table of Contents
 
-- [Project Goals](#-project-goals)
 - [Scientific Context](#-scientific-context)
 - [Pipeline Overview](#-pipeline-overview)
 - [Software Status and Compatibility](#-software-status-and-compatibility)

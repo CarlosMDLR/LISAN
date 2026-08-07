@@ -30,7 +30,6 @@ The current implementation has been developed primarily for **INT/WFC** imaging,
 - [Output Directory Structure](#-output-directory-structure)
 - [Command-Line Reference](#-command-line-reference)
 - [Complete Example Workflow](#-complete-example-workflow)
-- [Example Outputs](#-example-outputs)
 - [Network Requirements](#-network-requirements)
 - [Important Assumptions and Current Limitations](#-important-assumptions-and-current-limitations)
 - [Troubleshooting](#-troubleshooting)
@@ -1027,36 +1026,6 @@ python3 lisan.py \
 ```
 
 The joining GUI is opened separately for each selected galaxy/filter combination.
-
----
-
-## 🖼️ Example Outputs
-
-A future repository version should include representative screenshots and figures from each major stage. A suggested structure is:
-
-```text
-docs/
-└── images/
-    ├── input_example.png
-    ├── depth_example.png
-    ├── mask_noisechisel_example.png
-    ├── mask_segment_example.png
-    ├── mag_half_sum_radius_example.png
-    ├── stellar_stamps_example.png
-    ├── psf_parts_example.png
-    ├── psf_join_interface.png
-    ├── powerlaw_interface.png
-    ├── final_psf_profile.png
-    └── final_psf_2d.png
-```
-
-They can be inserted with standard Markdown, for example:
-
-```markdown
-![Magnitude versus half-sum-radius diagnostic](docs/images/mag_half_sum_radius_example.png)
-```
-
-Recommended examples to include are the input image, NoiseChisel/Segment masks, magnitude–half-sum-radius selection, stellar stamps, individual PSF parts, interactive joining window, power-law window, final radial PSF, and final circularized 2D PSF.
 
 ---
 

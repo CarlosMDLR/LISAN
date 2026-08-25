@@ -882,9 +882,13 @@ Outer defaults:
 
 The step parameters allow the outer stamp properties to change progressively with outer magnitude bin.
 
-## Stamp masking and visual inspection
+# PSF stamp masking parameters
 
-Separate GNUastro options can be supplied for inner and outer stamps:
+After each stellar PSF stamp has been extracted with `astscript-psf-stamp`, LISAN performs an additional masking step on the **individual stellar stamp** before it is accepted for stacking.
+
+This masking step is independent of the NoiseChisel and Segment configuration used previously to create the full-image catalogues.
+
+The four command-line parameters controlling this stage are:
 
 ```text
 --psf-nc-inner-params
@@ -893,8 +897,229 @@ Separate GNUastro options can be supplied for inner and outer stamps:
 --psf-seg-outer-params
 ```
 
-After masking, selected stamps are shown for manual visual inspection through `astscript-fits-view`/DS9, and individual stars can be removed before stacking.
+They allow the NoiseChisel and Segment configuration used to clean the individual stellar stamps to be adjusted independently for the inner and outer PSF components.
 
+## What is masked at this stage?
+
+The purpose of this masking step is **not to remove the star used to construct the PSF**.
+
+Instead, LISAN attempts to preserve the central target star while masking contaminating sources falling within the same stamp, such as:
+
+- neighbouring stars;
+- compact galaxies;
+- background sources;
+- unrelated detections overlapping the PSF stamp.
+
+The procedure applied to each stellar stamp is approximately:
+
+```text
+Extract normalized stellar stamp
+             │
+             ▼
+ Convert zero-valued pixels to NaN
+             │
+             ▼
+        NoiseChisel
+             │
+             ▼
+          Segment
+             │
+             ▼
+ Identify segmentation label(s)
+ associated with the central star
+             │
+             ▼
+ Preserve the central source
+             │
+             ▼
+ Mask all other segmented sources
+             │
+             ▼
+ Clean stellar stamp
+             │
+             ▼
+     Visual inspection
+             │
+             ▼
+          Stacking
+```
+
+LISAN identifies the central source from the segmentation map using both the label at the centre of the stamp and the dominant segmentation label in a small region around the centre. These central labels are excluded from the contaminant mask. All remaining non-zero segmentation labels are treated as contaminating sources and their corresponding pixels in the stellar stamp are replaced by `NaN`.
+
+This is therefore an important step for preventing neighbouring sources from contributing flux to the final stacked PSF.
+
+---
+
+## Inner PSF stamp masking
+
+The inner PSF components (`A`, `B`, `C`, or any alternative labels specified through `--psf-parts`) use:
+
+```text
+--psf-nc-inner-params
+--psf-seg-inner-params
+```
+
+### `--psf-nc-inner-params`
+
+Defines the GNUastro **NoiseChisel** parameters applied to each individual inner stellar stamp.
+
+If this option is not supplied, LISAN uses:
+
+```text
+--tilesize=20,20
+--outliernumngb=5
+--interpnumngb=1
+--qthresh=0.5
+--minnumfalse=1
+--rawoutput
+```
+
+### `--psf-seg-inner-params`
+
+Defines the GNUastro **Segment** parameters used after NoiseChisel on each inner stellar stamp.
+
+If this option is not supplied, LISAN uses:
+
+```text
+--tilesize=20,20
+--snminarea=2
+--interpnumngb=1
+--gthresh=-10
+--objbordersn=0
+--minnumfalse=1
+```
+
+These parameters determine how contaminating objects surrounding the central PSF star are detected and segmented.
+
+For example:
+
+```bash
+python3 lisan.py \
+    --dir ./data \
+    --filters g,r \
+    --build-psf \
+    --psf-select-parts I \
+    --psf-nc-inner-params="--tilesize=20,20 --outliernumngb=5 --interpnumngb=1 --qthresh=0.5 --minnumfalse=1 --rawoutput" \
+    --psf-seg-inner-params="--tilesize=20,20 --snminarea=2 --interpnumngb=1 --gthresh=-10 --objbordersn=0 --minnumfalse=1"
+```
+
+---
+
+## Outer PSF stamp masking
+
+The outer PSF components (`Outer_1`, `Outer_2`, ...) use:
+
+```text
+--psf-nc-outer-params
+--psf-seg-outer-params
+```
+
+These options have the same purpose as their inner counterparts but make it possible to use a different masking configuration for the substantially larger and brighter-star stamps used to construct the outer PSF.
+
+### `--psf-nc-outer-params`
+
+Defines the NoiseChisel parameters applied to the individual outer stellar stamps.
+
+### `--psf-seg-outer-params`
+
+Defines the Segment parameters applied to the individual outer stellar stamps.
+
+### Default behaviour for outer stamps
+
+If no outer-specific parameters are supplied, LISAN **reuses the inner stamp-masking configuration**:
+
+```text
+outer NoiseChisel parameters = inner NoiseChisel parameters
+outer Segment parameters      = inner Segment parameters
+```
+
+This inheritance also applies when the inner parameters have been customized.
+
+For example:
+
+```bash
+--psf-nc-inner-params="..."
+```
+
+combined with no:
+
+```bash
+--psf-nc-outer-params
+```
+
+means that the same customized NoiseChisel configuration will also be used for the outer stamps.
+
+Separate outer parameters only need to be supplied when a different masking behaviour is desired.
+
+For example:
+
+```bash
+python3 lisan.py \
+    --dir ./data \
+    --filters g,r \
+    --build-psf \
+    --psf-select-parts B \
+    --psf-nc-inner-params="--tilesize=20,20 --outliernumngb=5 --interpnumngb=1 --qthresh=0.5 --minnumfalse=1 --rawoutput" \
+    --psf-seg-inner-params="--tilesize=20,20 --snminarea=2 --interpnumngb=1 --gthresh=-10 --objbordersn=0 --minnumfalse=1" \
+    --psf-nc-outer-params="--tilesize=30,30 --outliernumngb=5 --interpnumngb=1 --qthresh=0.5 --minnumfalse=1 --rawoutput" \
+    --psf-seg-outer-params="--tilesize=30,30 --snminarea=2 --interpnumngb=1 --gthresh=-10 --objbordersn=0 --minnumfalse=1"
+```
+
+> **IMPORTANT — These parameters are different from the catalogue masking parameters**
+>
+> There are three conceptually different NoiseChisel/Segment configurations in LISAN:
+>
+> ```text
+> --noisechisel-params / --segment-params
+>     → diagnostic full-image masks generated by --make-masks
+>
+> --cats-noisechisel-params / --cats-segment-params
+>     → full-image detection and segmentation used to build the catalogues
+>
+> --psf-nc-*-params / --psf-seg-*-params
+>     → masking of contaminating objects inside individual stellar PSF stamps
+> ```
+>
+> They should not be confused with one another. In particular, optimizing the full-image segmentation does not necessarily imply that the same parameters are optimal for the much smaller stellar stamps.
+
+### Parameter replacement behaviour
+
+As in the catalogue stage, providing one of these options replaces the corresponding internal LISAN parameter list.
+
+For example:
+
+```bash
+--psf-nc-inner-params="--tilesize=30,30"
+```
+
+does **not** mean “use the LISAN defaults but change `--tilesize`”.
+
+It means that the NoiseChisel call receives the user-supplied parameter list instead of the LISAN default list. Any omitted options will therefore fall back to GNUastro's own behaviour.
+
+To change only the tile size while retaining the rest of the current LISAN configuration, explicitly provide the complete desired set:
+
+```bash
+--psf-nc-inner-params="--tilesize=30,30 --outliernumngb=5 --interpnumngb=1 --qthresh=0.5 --minnumfalse=1 --rawoutput"
+```
+
+---
+
+## Manual visual inspection
+
+After automatic masking, the cleaned stamps are displayed using `astscript-fits-view`/DS9.
+
+The user can visually inspect the selected stars and manually remove problematic stamps before the stacking stage.
+
+This provides a final quality-control step for cases in which automatic masking is insufficient, for example:
+
+- severely blended stars;
+- residual extended galaxies;
+- image artefacts;
+- problematic saturation patterns;
+- imperfect segmentation;
+- stars whose PSF morphology is clearly anomalous.
+
+Only the stamps remaining after this inspection are used to construct the corresponding stacked PSF component.
 ## Stacking
 
 Accepted stellar stamps are combined with GNUastro `astarithmetic` using a sigma-clipped mean. The code checks image data in both HDU 0 and HDU 1 before validating the stack. A radial profile is then produced with `astscript-radial-profile` using `mean`, `std`, `area`, and `semi-major` measurements.

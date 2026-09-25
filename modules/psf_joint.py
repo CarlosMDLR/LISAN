@@ -243,7 +243,7 @@ def load_lisan_parts(
         inner_dirs = _collect(inner_root, rf"{re.escape(gal)}_.*_{re.escape(flt)}$")
     if not outer_dirs:
         outer_dirs = _collect(outer_root, rf"{re.escape(gal)}_.*_{re.escape(flt)}$")
-    breakpoint()
+    
     # Helper to build PSFPart from dir
     def _make_part_from_dir(d: Path) -> Optional[PSFPart]:
         prof, stack = _find_profile_and_stack(d)
